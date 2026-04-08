@@ -1,0 +1,159 @@
+#include <WiFi.h>
+#include <WebServer.h>
+
+// WiFi credentials
+const char* ssid = "Iphone9";
+const char* password = "1234567890";
+
+// Web server
+WebServer server(80);
+
+// LED pins
+const int FALL_LED_PIN = 16;
+const int STATUS_LED_PIN = 17;
+const int WIFI_LED_PIN = 25;
+
+// Buzzer pin
+const int BUZZER_PIN = 27;
+
+// -------- FALL TIMER --------
+bool fallActive = false;
+unsigned long fallStartTime = 0;
+const unsigned long FALL_DURATION = 5000; // 5 seconds
+
+// -------- SIREN VARIABLES --------
+int sirenFreq = 800;
+bool sirenUp = true;
+unsigned long lastSirenChange = 0;
+
+const int SIREN_STEP = 20;
+const int SIREN_MIN = 800;
+const int SIREN_MAX = 2000;
+const int SIREN_INTERVAL = 30;
+
+// ---------------- FALL MESSAGE ----------------
+void handleFall() {
+Serial.println("----------");
+Serial.println("FALL ALERT RECEIVED!");
+Serial.println("----------");
+
+fallActive = true;
+fallStartTime = millis();
+
+digitalWrite(FALL_LED_PIN, HIGH);
+
+server.send(200, "text/plain", "Fall alert received");
+}
+
+// ---------------- WIFI CONNECT ----------------
+void connectWiFi() {
+Serial.println("Connecting to WiFi...");
+WiFi.mode(WIFI_STA);
+WiFi.begin(ssid, password);
+WiFi.setAutoReconnect(true);
+
+while (WiFi.status() != WL_CONNECTED) {
+delay(500);
+Serial.print(".");
+}
+
+Serial.println("");
+Serial.println("WiFi Connected!");
+Serial.print("Receiver IP address: ");
+Serial.println(WiFi.localIP());
+}
+
+// ---------------- SETUP ----------------
+void setup() {
+Serial.begin(115200);
+
+pinMode(FALL_LED_PIN, OUTPUT);
+pinMode(STATUS_LED_PIN, OUTPUT);
+pinMode(WIFI_LED_PIN, OUTPUT);
+pinMode(BUZZER_PIN, OUTPUT);
+
+digitalWrite(FALL_LED_PIN, LOW);
+digitalWrite(STATUS_LED_PIN, LOW);
+digitalWrite(WIFI_LED_PIN, LOW);
+digitalWrite(BUZZER_PIN, LOW);
+
+connectWiFi();
+
+server.on("/fall", handleFall);
+server.begin();
+
+Serial.println("Server started");
+}
+
+// ---------------- LOOP ----------------
+void loop() {
+server.handleClient();
+
+unsigned long now = millis();
+
+// -------- STATUS LED --------
+static unsigned long lastStatusBlink = 0;
+if (now - lastStatusBlink >= 1000) {
+lastStatusBlink = now;
+digitalWrite(STATUS_LED_PIN, !digitalRead(STATUS_LED_PIN));
+}
+
+// -------- WIFI LED --------
+digitalWrite(WIFI_LED_PIN, WiFi.status() == WL_CONNECTED);
+
+// -------- FALL ALERT (LED + SIREN) --------
+if (fallActive) {
+
+// LED ON
+digitalWrite(FALL_LED_PIN, HIGH);
+
+// 🚑 Ambulance siren
+if (now - lastSirenChange >= SIREN_INTERVAL) {
+lastSirenChange = now;
+
+if (sirenUp) {
+sirenFreq += SIREN_STEP;
+if (sirenFreq >= SIREN_MAX) sirenUp = false;
+} else {
+sirenFreq -= SIREN_STEP;
+if (sirenFreq <= SIREN_MIN) sirenUp = true;
+}
+
+tone(BUZZER_PIN, sirenFreq);
+}
+
+// Stop after 1 minute
+if (now - fallStartTime >= FALL_DURATION) {
+fallActive = false;
+
+digitalWrite(FALL_LED_PIN, LOW);
+noTone(BUZZER_PIN);
+
+Serial.println("Fall alert ended");
+}
+}
+
+// -------- SERIAL STATUS --------
+static unsigned long lastSerial = 0;
+if (now - lastSerial >= 5000) {
+lastSerial = now;
+
+Serial.println("========== STATUS UPDATE ==========");
+Serial.print("System Alive: YES, millis = ");
+Serial.println(now);
+
+if (WiFi.status() == WL_CONNECTED) {
+Serial.println("WiFi Status: CONNECTED");
+} else {
+Serial.println("WiFi Status: NOT CONNECTED");
+}
+
+if (fallActive) {
+Serial.println("Fall Alert: ACTIVE");
+} else {
+Serial.println("Fall Alert: NONE");
+}
+
+Serial.println("===================================");
+}
+}
