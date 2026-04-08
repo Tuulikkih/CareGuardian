@@ -1,0 +1,177 @@
+#include <Wire.h>
+#include <MPU6050.h>
+#include <WiFi.h>
+#include <HTTPClient.h>
+
+MPU6050 mpu;
+
+// ---------------- WIFI ----------------
+const char* ssid = "YOUR_WIFI_NAME";
+const char* password = "YOUR_WIFI_PASSWORD";
+
+// Receiver ESP32 IP
+const char* receiverIP = "192.168.1.100"; // <-- Replace with your receiver IP
+
+const int WIFI_LED_PIN = 26;
+unsigned long lastWiFiPrint = 0;
+const unsigned long WIFI_PRINT_INTERVAL = 15000;
+
+// ---------------- FALL ----------------
+const int FALL_LED_PIN = 25;
+
+const int G_1 = 16384;
+const int FREEFALL_THR = 7000;
+const int IMPACT_THR = 26000;
+const int STILL_BAND = 3000;
+
+const unsigned long STILL_MS = 3000;
+const unsigned long RESET_AFTER_MS = 10000;
+const unsigned long BLINK_INTERVAL = 150;
+
+// ---------------- MOVING AVERAGE ----------------
+const int MA_SIZE = 5;
+long maBuffer[MA_SIZE] = {0};
+int maIndex = 0;
+
+// ---------------- STATE ----------------
+bool freeFallSeen = false;
+bool impactSeen = false;
+bool fallConfirmed = false;
+bool fallSent = false;
+
+unsigned long stillStart = 0;
+unsigned long confirmTime = 0;
+
+unsigned long lastBlinkTime = 0;
+bool redLedState = false;
+
+// ---------------- MOVING AVERAGE ----------------
+long movingAverage(long newVal) {
+maBuffer[maIndex] = newVal;
+maIndex = (maIndex + 1) % MA_SIZE;
+
+long sum = 0;
+for (int i = 0; i < MA_SIZE; i++) sum += maBuffer[i];
+
+return sum / MA_SIZE;
+}
+
+// ---------------- WIFI CONNECT ----------------
+void connectWiFi() {
+if (WiFi.status() == WL_CONNECTED) return;
+
+Serial.println("Connecting to WiFi...");
+WiFi.begin(ssid, password);
+}
+
+// ---------------- SETUP ----------------
+void setup() {
+Serial.begin(115200);
+
+pinMode(WIFI_LED_PIN, OUTPUT);
+pinMode(FALL_LED_PIN, OUTPUT);
+
+digitalWrite(WIFI_LED_PIN, LOW);
+digitalWrite(FALL_LED_PIN, LOW);
+
+WiFi.mode(WIFI_STA);
+connectWiFi();
+
+Wire.begin();
+mpu.initialize();
+
+Serial.println(mpu.testConnection() ? "MPU OK" : "MPU FAIL");
+}
+
+// ---------------- LOOP ----------------
+void loop() {
+unsigned long now = millis();
+
+// -------- WIFI HANDLING --------
+if (WiFi.status() == WL_CONNECTED) {
+digitalWrite(WIFI_LED_PIN, HIGH);
+
+if (now - lastWiFiPrint >= WIFI_PRINT_INTERVAL) {
+lastWiFiPrint = now;
+Serial.println("WiFi is still connected");
+}
+
+} else {
+digitalWrite(WIFI_LED_PIN, LOW);
+static unsigned long lastReconnectAttempt = 0;
+if (now - lastReconnectAttempt > 5000) {
+lastReconnectAttempt = now;
+connectWiFi();
+Serial.println("Trying to reconnect...");
+}
+}
+
+// -------- MPU READ --------
+int16_t ax, ay, az;
+mpu.getAcceleration(&ax, &ay, &az);
+
+long magRaw = sqrt((long)ax * ax + (long)ay * ay + (long)az * az);
+long mag = movingAverage(magRaw);
+
+// -------- FREE FALL --------
+if (!freeFallSeen && mag < FREEFALL_THR) freeFallSeen = true;
+
+// -------- IMPACT --------
+if (freeFallSeen && !impactSeen && mag > IMPACT_THR) impactSeen = true;
+
+// -------- STILLNESS --------
+if (impactSeen) {
+if (mag > (G_1 - STILL_BAND) && mag < (G_1 + STILL_BAND)) {
+if (stillStart == 0) stillStart = now;
+
+if (!fallConfirmed && (now - stillStart > STILL_MS)) {
+fallConfirmed = true;
+confirmTime = now;
+Serial.println("FALL CONFIRMED");
+}
+} else {
+stillStart = 0;
+}
+}
+
+// -------- SEND FALL ALERT TO RECEIVER --------
+if (fallConfirmed && !fallSent) {
+if (WiFi.status() == WL_CONNECTED) {
+HTTPClient http;
+String url = String("http://") + receiverIP + "/fall";
+http.begin(url);
+int httpResponseCode = http.GET();
+
+if (httpResponseCode > 0) {
+Serial.println("Fall alert sent to receiver!");
+} else {
+Serial.print("Error sending fall alert: ");
+Serial.println(httpResponseCode);
+}
+http.end();
+fallSent = true;
+}
+}
+
+// -------- RED LED BLINK --------
+if (fallConfirmed) {
+if (now - lastBlinkTime >= BLINK_INTERVAL) {
+lastBlinkTime = now;
+redLedState = !redLedState;
+digitalWrite(FALL_LED_PIN, redLedState);
+}
+}
+
+// -------- RESET --------
+if (fallConfirmed && (now - confirmTime > RESET_AFTER_MS)) {
+freeFallSeen = false;
+impactSeen = false;
+fallConfirmed = false;
+fallSent = false;
+stillStart = 0;
+digitalWrite(FALL_LED_PIN, LOW);
+Serial.println("System reset");
+}
+
+delay(50);
+}
