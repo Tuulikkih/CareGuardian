@@ -109,7 +109,7 @@ digitalWrite(FALL_LED_PIN, HIGH);
 
 // 🚑 Ambulance siren
 if (now - lastSirenChange >= SIREN_INTERVAL) {
-lastSirenChange = now;
+lastSirenChange = now;53
 
 if (sirenUp) {
 sirenFreq += SIREN_STEP;
