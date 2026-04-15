@@ -12,6 +12,10 @@ const char* password = "1234567890";
 // Receiver ESP32 IP
 const char* receiverIP = "172.20.10.10"; // <-- Replace with your receiver IP
 
+// ---------------- WHATSAPP (CALLMEBOT) ----------------
+const char* phoneNumber = "358";
+const char* apiKey = "7788012";
+
 const int WIFI_LED_PIN = 26;
 unsigned long lastWiFiPrint = 0;
 const unsigned long WIFI_PRINT_INTERVAL = 5000; // print every 5 sec
@@ -47,147 +51,172 @@ bool redLedState = false;
 
 // ---------------- MOVING AVERAGE ----------------
 long movingAverage(long newVal) {
-maBuffer[maIndex] = newVal;
-maIndex = (maIndex + 1) % MA_SIZE;
+  maBuffer[maIndex] = newVal;
+  maIndex = (maIndex + 1) % MA_SIZE;
 
-long sum = 0;
-for (int i = 0; i < MA_SIZE; i++) sum += maBuffer[i];
+  long sum = 0;
+  for (int i = 0; i < MA_SIZE; i++) sum += maBuffer[i];
 
-return sum / MA_SIZE;
+  return sum / MA_SIZE;
 }
 
 // ---------------- WIFI CONNECT ----------------
 void connectWiFi() {
-if (WiFi.status() == WL_CONNECTED) return;
+  if (WiFi.status() == WL_CONNECTED) return;
 
-Serial.println("Connecting to WiFi...");
-WiFi.begin(ssid, password);
+  Serial.println("Connecting to WiFi...");
+  WiFi.begin(ssid, password);
 }
 
 // ---------------- PRINT NETWORK INFO ----------------
 void printNetworkInfo() {
-Serial.print("IP Address: ");
-Serial.println(WiFi.localIP());
+  Serial.print("IP Address: ");
+  Serial.println(WiFi.localIP());
 
-Serial.print("MAC Address: ");
-Serial.println(WiFi.macAddress());
+  Serial.print("MAC Address: ");
+  Serial.println(WiFi.macAddress());
 
-Serial.println("----------------------");
+  Serial.println("----------------------");
+}
+
+// ---------------- WHATSAPP ALERT (ADDED ONLY) ----------------
+void sendWhatsAppAlert() {
+  HTTPClient http;
+
+  String message = "🚨%20FALL%20DETECTED!%20Please%20check%20immediately.";
+  String url = "https://api.callmebot.com/whatsapp.php?phone=" +
+               String(phoneNumber) +
+               "&text=" + message +
+               "&apikey=" + String(apiKey);
+
+  http.begin(url);
+  int code = http.GET();
+
+  Serial.print("WhatsApp response: ");
+  Serial.println(code);
+
+  http.end();
 }
 
 // ---------------- SETUP ----------------
 void setup() {
-Serial.begin(115200);
+  Serial.begin(115200);
 
-pinMode(WIFI_LED_PIN, OUTPUT);
-pinMode(FALL_LED_PIN, OUTPUT);
+  pinMode(WIFI_LED_PIN, OUTPUT);
+  pinMode(FALL_LED_PIN, OUTPUT);
 
-digitalWrite(WIFI_LED_PIN, LOW);
-digitalWrite(FALL_LED_PIN, LOW);
+  digitalWrite(WIFI_LED_PIN, LOW);
+  digitalWrite(FALL_LED_PIN, LOW);
 
-WiFi.mode(WIFI_STA);
-connectWiFi();
+  WiFi.mode(WIFI_STA);
+  connectWiFi();
 
-Wire.begin();
-mpu.initialize();
+  Wire.begin();
+  mpu.initialize();
 
-Serial.println(mpu.testConnection() ? "MPU OK" : "MPU FAIL");
+  Serial.println(mpu.testConnection() ? "MPU OK" : "MPU FAIL");
 }
 
 // ---------------- LOOP ----------------
 void loop() {
-unsigned long now = millis();
+  unsigned long now = millis();
 
-// -------- WIFI HANDLING --------
-if (WiFi.status() == WL_CONNECTED) {
-digitalWrite(WIFI_LED_PIN, HIGH);
+  // -------- WIFI HANDLING --------
+  if (WiFi.status() == WL_CONNECTED) {
+    digitalWrite(WIFI_LED_PIN, HIGH);
 
-if (now - lastWiFiPrint >= WIFI_PRINT_INTERVAL) {
-lastWiFiPrint = now;
-Serial.println("WiFi is still connected");
-printNetworkInfo();  // <-- prints IP + MAC continually
-}
+    if (now - lastWiFiPrint >= WIFI_PRINT_INTERVAL) {
+      lastWiFiPrint = now;
+      Serial.println("WiFi is still connected");
+      printNetworkInfo();
+    }
 
-} else {
-digitalWrite(WIFI_LED_PIN, LOW);
+  } else {
+    digitalWrite(WIFI_LED_PIN, LOW);
 
-static unsigned long lastReconnectAttempt = 0;
-if (now - lastReconnectAttempt > 5000) {
-lastReconnectAttempt = now;
-connectWiFi();
-Serial.println("Trying to reconnect...");
-}
-}
+    static unsigned long lastReconnectAttempt = 0;
+    if (now - lastReconnectAttempt > 5000) {
+      lastReconnectAttempt = now;
+      connectWiFi();
+      Serial.println("Trying to reconnect...");
+    }
+  }
 
-// -------- MPU READ --------
-int16_t ax, ay, az;
-mpu.getAcceleration(&ax, &ay, &az);
+  // -------- MPU READ --------
+  int16_t ax, ay, az;
+  mpu.getAcceleration(&ax, &ay, &az);
 
-long magRaw = sqrt((long)ax * ax + (long)ay * ay + (long)az * az);
-long mag = movingAverage(magRaw);
+  long magRaw = sqrt((long)ax * ax + (long)ay * ay + (long)az * az);
+  long mag = movingAverage(magRaw);
 
-// -------- FREE FALL --------
-if (!freeFallSeen && mag < FREEFALL_THR) freeFallSeen = true;
+  // -------- FREE FALL --------
+  if (!freeFallSeen && mag < FREEFALL_THR) freeFallSeen = true;
 
-// -------- IMPACT --------
-if (freeFallSeen && !impactSeen && mag > IMPACT_THR) impactSeen = true;
+  // -------- IMPACT --------
+  if (freeFallSeen && !impactSeen && mag > IMPACT_THR) impactSeen = true;
 
-// -------- STILLNESS --------
-if (impactSeen) {
-if (mag > (G_1 - STILL_BAND) && mag < (G_1 + STILL_BAND)) {
-if (stillStart == 0) stillStart = now;
+  // -------- STILLNESS --------
+  if (impactSeen) {
+    if (mag > (G_1 - STILL_BAND) && mag < (G_1 + STILL_BAND)) {
+      if (stillStart == 0) stillStart = now;
 
-if (!fallConfirmed && (now - stillStart > STILL_MS)) {
-fallConfirmed = true;
-confirmTime = now;
-Serial.println("FALL CONFIRMED");
-}
-} else {
-stillStart = 0;
-}
-}
+      if (!fallConfirmed && (now - stillStart > STILL_MS)) {
+        fallConfirmed = true;
+        confirmTime = now;
+        Serial.println("FALL CONFIRMED");
+      }
+    } else {
+      stillStart = 0;
+    }
+  }
 
-// -------- SEND FALL ALERT TO RECEIVER --------
-if (fallConfirmed && !fallSent) {
-if (WiFi.status() == WL_CONNECTED) {
-HTTPClient http;
-String url = String("http://") + receiverIP + "/fall";
+  // -------- SEND FALL ALERT TO RECEIVER + WHATSAPP --------
+  if (fallConfirmed && !fallSent) {
+    if (WiFi.status() == WL_CONNECTED) {
 
-http.begin(url);
-int httpResponseCode = http.GET();
+      // ORIGINAL receiver alert (UNCHANGED)
+      HTTPClient http;
+      String url = String("http://") + receiverIP + "/fall";
 
-if (httpResponseCode > 0) {
-Serial.println("Fall alert sent to receiver!");
-} else {
-Serial.print("Error sending fall alert: ");
-Serial.println(httpResponseCode);
-}
+      http.begin(url);
+      int httpResponseCode = http.GET();
 
-http.end();
-fallSent = true;
-}
-}
+      if (httpResponseCode > 0) {
+        Serial.println("Fall alert sent to receiver!");
+      } else {
+        Serial.print("Error sending fall alert: ");
+        Serial.println(httpResponseCode);
+      }
 
-// -------- RED LED BLINK --------
-if (fallConfirmed) {
-if (now - lastBlinkTime >= BLINK_INTERVAL) {
-lastBlinkTime = now;
-redLedState = !redLedState;
-digitalWrite(FALL_LED_PIN, redLedState);
-}
-}
+      http.end();
 
-// -------- RESET --------
-if (fallConfirmed && (now - confirmTime > RESET_AFTER_MS)) {
-freeFallSeen = false;
-impactSeen = false;
-fallConfirmed = false;
-fallSent = false;
-stillStart = 0;
+      // ADDED: WhatsApp alert
+      sendWhatsAppAlert();
 
-digitalWrite(FALL_LED_PIN, LOW);
-Serial.println("System reset");
-}
+      fallSent = true;
+    }
+  }
 
-delay(50);
+  // -------- RED LED BLINK --------
+  if (fallConfirmed) {
+    if (now - lastBlinkTime >= BLINK_INTERVAL) {
+      lastBlinkTime = now;
+      redLedState = !redLedState;
+      digitalWrite(FALL_LED_PIN, redLedState);
+    }
+  }
+
+  // -------- RESET --------
+  if (fallConfirmed && (now - confirmTime > RESET_AFTER_MS)) {
+    freeFallSeen = false;
+    impactSeen = false;
+    fallConfirmed = false;
+    fallSent = false;
+    stillStart = 0;
+
+    digitalWrite(FALL_LED_PIN, LOW);
+    Serial.println("System reset");
+  }
+
+  delay(50);
 }
