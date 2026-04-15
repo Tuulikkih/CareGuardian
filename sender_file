@@ -6,15 +6,15 @@
 MPU6050 mpu;
 
 // ---------------- WIFI ----------------
-const char* ssid = "YOUR_WIFI_NAME";
-const char* password = "YOUR_WIFI_PASSWORD";
+const char* ssid = "Iphone9";
+const char* password = "1234567890";
 
 // Receiver ESP32 IP
-const char* receiverIP = "192.168.1.100"; // <-- Replace with your receiver IP
+const char* receiverIP = "172.20.10.10"; // <-- Replace with your receiver IP
 
 const int WIFI_LED_PIN = 26;
 unsigned long lastWiFiPrint = 0;
-const unsigned long WIFI_PRINT_INTERVAL = 15000;
+const unsigned long WIFI_PRINT_INTERVAL = 5000; // print every 5 sec
 
 // ---------------- FALL ----------------
 const int FALL_LED_PIN = 25;
@@ -64,6 +64,17 @@ Serial.println("Connecting to WiFi...");
 WiFi.begin(ssid, password);
 }
 
+// ---------------- PRINT NETWORK INFO ----------------
+void printNetworkInfo() {
+Serial.print("IP Address: ");
+Serial.println(WiFi.localIP());
+
+Serial.print("MAC Address: ");
+Serial.println(WiFi.macAddress());
+
+Serial.println("----------------------");
+}
+
 // ---------------- SETUP ----------------
 void setup() {
 Serial.begin(115200);
@@ -94,10 +105,12 @@ digitalWrite(WIFI_LED_PIN, HIGH);
 if (now - lastWiFiPrint >= WIFI_PRINT_INTERVAL) {
 lastWiFiPrint = now;
 Serial.println("WiFi is still connected");
+printNetworkInfo();  // <-- prints IP + MAC continually
 }
 
 } else {
 digitalWrite(WIFI_LED_PIN, LOW);
+
 static unsigned long lastReconnectAttempt = 0;
 if (now - lastReconnectAttempt > 5000) {
 lastReconnectAttempt = now;
@@ -139,6 +152,7 @@ if (fallConfirmed && !fallSent) {
 if (WiFi.status() == WL_CONNECTED) {
 HTTPClient http;
 String url = String("http://") + receiverIP + "/fall";
+
 http.begin(url);
 int httpResponseCode = http.GET();
 
@@ -148,6 +162,7 @@ Serial.println("Fall alert sent to receiver!");
 Serial.print("Error sending fall alert: ");
 Serial.println(httpResponseCode);
 }
+
 http.end();
 fallSent = true;
 }
@@ -169,6 +184,7 @@ impactSeen = false;
 fallConfirmed = false;
 fallSent = false;
 stillStart = 0;
+
 digitalWrite(FALL_LED_PIN, LOW);
 Serial.println("System reset");
 }
